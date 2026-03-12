@@ -1,22 +1,15 @@
 from flask import Flask, render_template_string, request, redirect, url_for
+from gunicorn.app.base import BaseApplication
 import requests
-import threading
 import time
 import os
 
-# =============================================
-# UYGULAMA AYARLARI
-# =============================================
 app = Flask(__name__)
 
-# Global degiskenler
 target_phone = ""
 logs = []
 sms_count = 0
 
-# =============================================
-# SMS GONDERIM FONKSIYONU
-# =============================================
 def send_kahve_dunyasi_otp():
     global target_phone, logs, sms_count
     if not target_phone:
@@ -51,21 +44,6 @@ def send_kahve_dunyasi_otp():
     if len(logs) > 50:
         logs.pop(0)
 
-# =============================================
-# ARKA PLAN THREAD - 2 DAKIKADA BIR CALISIR
-# =============================================
-def background_scheduler():
-    while True:
-        time.sleep(120)  # 2 dakika bekle
-        send_kahve_dunyasi_otp()
-
-# Thread'i baslat (daemon=True: uygulama kapaninca thread de kapanir)
-scheduler_thread = threading.Thread(target=background_scheduler, daemon=True)
-scheduler_thread.start()
-
-# =============================================
-# WEB ARAYUZU
-# =============================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="tr">
@@ -75,12 +53,7 @@ HTML_TEMPLATE = """
     <title>SMS Panel</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #0d1117; color: #c9d1d9;
-            min-height: 100vh; display: flex;
-            justify-content: center; align-items: flex-start; padding: 40px 20px;
-        }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0d1117; color: #c9d1d9; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 40px 20px; }
         .container { width: 100%; max-width: 480px; }
         .header { text-align: center; margin-bottom: 25px; }
         .header h1 { font-size: 22px; font-weight: 700; color: #58a6ff; letter-spacing: 1px; }
@@ -123,29 +96,14 @@ HTML_TEMPLATE = """
         <div class="card">
             <div class="card-title">Sistem Durumu</div>
             {% if phone %}
-            <div class="status-badge status-active">
-                <div class="dot dot-green"></div>
-                AKTIF - +90 {{ phone }}
-            </div>
+            <div class="status-badge status-active"><div class="dot dot-green"></div>AKTIF - +90 {{ phone }}</div>
             {% else %}
-            <div class="status-badge status-waiting">
-                <div class="dot dot-yellow"></div>
-                NUMARA BEKLENIYOR
-            </div>
+            <div class="status-badge status-waiting"><div class="dot dot-yellow"></div>NUMARA BEKLENIYOR</div>
             {% endif %}
             <div class="stats">
-                <div class="stat-box">
-                    <div class="stat-value">{{ sms_count }}</div>
-                    <div class="stat-label">Toplam Gonderim</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-value">2</div>
-                    <div class="stat-label">Dakika Aralik</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-value">24</div>
-                    <div class="stat-label">Saat Surekli</div>
-                </div>
+                <div class="stat-box"><div class="stat-value">{{ sms_count }}</div><div class="stat-label">Toplam Gonderim</div></div>
+                <div class="stat-box"><div class="stat-value">2</div><div class="stat-label">Dakika Aralik</div></div>
+                <div class="stat-box"><div class="stat-value">24</div><div class="stat-label">Saat Surekli</div></div>
             </div>
         </div>
         <div class="card">
@@ -159,9 +117,7 @@ HTML_TEMPLATE = """
             <div class="card-title">Canli Log</div>
             <div class="log-box" id="logBox">
                 {% for log in logs %}
-                <div class="log-entry {% if 'Hata' in log or 'Asimi' in log %}error{% elif 'guncellendi' in log %}info{% endif %}">
-                    > {{ log }}
-                </div>
+                <div class="log-entry {% if 'Hata' in log or 'Asimi' in log %}error{% elif 'guncellendi' in log %}info{% endif %}"> > {{ log }}</div>
                 {% else %}
                 <div style="color: #484f58;">Henuz gonderim yapilmadi. Numara girerek baslatin.</div>
                 {% endfor %}
@@ -169,10 +125,7 @@ HTML_TEMPLATE = """
         </div>
         <div class="footer">Her 20 saniyede bir otomatik yenilenir | Render Web Service</div>
     </div>
-    <script>
-        const lb = document.getElementById('logBox');
-        if (lb) lb.scrollTop = lb.scrollHeight;
-    </script>
+    <script>const lb = document.getElementById('logBox'); if (lb) lb.scrollTop = lb.scrollHeight;</script>
 </body>
 </html>
 """
@@ -194,6 +147,32 @@ def index():
         sms_count=sms_count
     )
 
+class GunicornApp(BaseApplication):
+    def __init__(self, flask_app, options=None):
+        self.options = options or {}
+        self.application = flask_app
+        super().__init__()
+
+    def load_config(self):
+        for key, value in self.options.items():
+            self.cfg.set(key.lower(), value)
+
+    def load(self):
+        return self.application
+
+    def post_fork(self, server, worker):
+        import threading
+        def scheduler():
+            while True:
+                time.sleep(120)
+                send_kahve_dunyasi_otp()
+        t = threading.Thread(target=scheduler, daemon=True)
+        t.start()
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    port = os.environ.get("PORT", "5000")
+    options = {
+        "bind": f"0.0.0.0:{port}",
+        "workers": 1,
+    }
+    GunicornApp(app, options).run()
