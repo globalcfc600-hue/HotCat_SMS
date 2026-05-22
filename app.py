@@ -1,6 +1,5 @@
 from flask import Flask, render_template_string, request, redirect, url_for
 import requests
-import threading
 import time
 import os
 
@@ -9,7 +8,6 @@ app = Flask(__name__)
 target_phone = ""
 logs = []
 sms_count = 0
-_scheduler_started = False
 
 def send_kahve_dunyasi_otp():
     global target_phone, logs, sms_count
@@ -44,19 +42,6 @@ def send_kahve_dunyasi_otp():
 
     if len(logs) > 50:
         logs.pop(0)
-
-def _run_scheduler():
-    while True:
-        time.sleep(120)
-        send_kahve_dunyasi_otp()
-
-@app.before_request
-def start_scheduler():
-    global _scheduler_started
-    if not _scheduler_started:
-        _scheduler_started = True
-        t = threading.Thread(target=_run_scheduler, daemon=True)
-        t.start()
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
